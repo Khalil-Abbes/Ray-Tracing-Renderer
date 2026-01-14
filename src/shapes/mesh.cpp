@@ -125,16 +125,28 @@ protected:
         // Copied from Khalil's implementation
         // TODO: Come back to this and implement properly
         // TODO: Doesn't seem to be covered by tests so not sure if correct
-        Vector dpAB  = Vector(c2.position - c1.position);
-        Vector dpAC  = Vector(c3.position - c1.position);
+        Vector dpAB  = c2.position - c1.position;
+        Vector dpAC  = c3.position - c1.position;
         Vector2 uvAB = c2.uv - c1.uv;
         Vector2 uvAC = c3.uv - c1.uv;
-        float uvDet  = uvAB.x() * uvAC.y() - uvAB.y() * uvAC.x();
+
+        float uvDet = uvAB.x() * uvAC.y() - uvAB.y() * uvAC.x();
+
         if (fabs(uvDet) > 1e-10f) {
-            float tangentScale = 1.0f / uvDet;
-            Vector tangentDir =
-                (dpAB * uvAC.y() - dpAC * uvAB.y()) * tangentScale;
-            its.tangent = tangentDir;
+            float inv = 1.0f / uvDet;
+
+            // Tangent points along +u direction on the surface
+            its.tangent = (dpAB * uvAC.y() - dpAC * uvAB.y()) * inv;
+
+            // Make it a proper tangent for your shading frame
+            its.tangent = its.tangent.normalized();
+            its.tangent = (its.tangent - its.shadingNormal *
+                                             its.tangent.dot(its.shadingNormal))
+                              .normalized();
+        } else {
+            // UVs are degenerate -> build any stable tangent from the normal
+            Vector bitangent;
+            buildOrthonormalBasis(its.shadingNormal, its.tangent, bitangent);
         }
 
         // TODO: not implemented

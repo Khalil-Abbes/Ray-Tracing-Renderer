@@ -6,14 +6,41 @@
 
 namespace lightwave {
 
+void Instance::applyNormalMap(Intersection &cand) const {
+    if (!m_normal)
+        return;
+
+    Color c = m_normal->evaluate(cand.uv); // [0,1]
+
+    Vector n_tan(2.0f * c.r() - 1.0f, 2.0f * c.g() - 1.0f, 2.0f * c.b() - 1.0f);
+
+    n_tan = Vector(n_tan.x() * m_normalStrength,
+                   n_tan.y() * m_normalStrength,
+                   n_tan.z())
+                .normalized();
+
+    Frame f            = cand.shadingFrame();
+    cand.shadingNormal = f.toWorld(n_tan).normalized();
+}
+
 void Instance::transformFrame(SurfaceEvent &surf, const Vector &wo) const {
+    // Normals: inverse-transpose (needed for non-uniform scaling)
     surf.geometryNormal =
         surf.instance->m_transform->applyNormal(surf.geometryNormal)
             .normalized();
     surf.shadingNormal =
         surf.instance->m_transform->applyNormal(surf.shadingNormal)
             .normalized();
-    // surf.tangent is not transformed here for simplicity, but could be
+
+    // Tangent: regular vector transform (w=0), then re-orthonormalize vs N
+    surf.tangent = surf.instance->m_transform->apply(surf.tangent).normalized();
+
+    // Gram–Schmidt: make tangent perpendicular to shadingNormal
+    surf.tangent = (surf.tangent -
+                    surf.shadingNormal * surf.tangent.dot(surf.shadingNormal))
+                       .normalized();
+
+    // Point: regular point transform (w=1)
     surf.position = surf.instance->m_transform->apply(surf.position);
 }
 
@@ -37,34 +64,26 @@ inline void validateIntersection(const Intersection &its) {
 
 bool Instance::intersect(const Ray &worldRay, Intersection &its,
                          Sampler &rng) const {
-    // If we end up returning false, we must not modify 'its' at all.
     const Intersection itsBackup = its;
-
-    // If there is already a closer hit in 'itsBackup', we must not return hits
-    // behind it.
-    const float tMaxWorld = itsBackup.t;
+    const float tMaxWorld        = itsBackup.t;
 
     auto acceptByAlpha = [&](const Intersection &cand) -> bool {
         if (!m_alpha)
-            return true; // no mask => always accept
-        float a = m_alpha->scalar(cand.uv);
-        a       = std::clamp(a, 0.0f, 1.0f);
-        return rng.next() <= a; // accept with probability a
+            return true;
+        float a = std::clamp(m_alpha->scalar(cand.uv), 0.0f, 1.0f);
+        return rng.next() <= a;
     };
 
     // ----------------------------
     // Path 1: No transform
     // ----------------------------
     if (!m_transform) {
-        Ray r = worldRay;
-
-        // Track how far we already advanced along the *original* world ray.
+        Ray r             = worldRay;
         float tAccumWorld = 0.0f;
 
         for (int guard = 0; guard < 256; ++guard) {
-            Intersection cand = itsBackup;    // start from backup each attempt
-            cand.t = tMaxWorld - tAccumWorld; // remaining distance budget
-
+            Intersection cand = itsBackup;
+            cand.t            = tMaxWorld - tAccumWorld;
             if (cand.t <= Epsilon) {
                 its = itsBackup;
                 return false;
@@ -79,19 +98,14 @@ bool Instance::intersect(const Ray &worldRay, Intersection &its,
             validateIntersection(cand);
 
             if (acceptByAlpha(cand)) {
-                // Convert candidate t back to the original world-ray parameter:
-                // current ray origin is worldRay.origin + tAccumWorld * dir, so
-                // total is:
-                cand.t += tAccumWorld;
+                cand.t += tAccumWorld; // convert to worldRay parameter
+                applyNormalMap(cand);  // apply once
                 its = cand;
                 return true;
             }
 
-            // Rejected: step forward and try again behind this surface.
-            // Advance by cand.t in the *current* ray parameter.
-            const float step = cand.t;
-            tAccumWorld += step + Epsilon;
-
+            // rejected: step forward and continue
+            tAccumWorld += cand.t + Epsilon;
             r.origin = worldRay.origin + tAccumWorld * worldRay.direction;
         }
 
@@ -104,13 +118,8 @@ bool Instance::intersect(const Ray &worldRay, Intersection &its,
     // ----------------------------
     Ray localRay = m_transform->inverse(worldRay).normalized();
 
-    // Convert existing closest-hit (world) into a local "distance budget"
-    // estimate. This mirrors the idea from the framework: intersection routines
-    // often use its.t as a max bound.
     float tMaxLocal = std::numeric_limits<float>::infinity();
     if (itsBackup) {
-        // itsBackup.position is in world space; map it to local and measure
-        // distance from local origin.
         const Point pLocalMax = m_transform->inverse(itsBackup.position);
         tMaxLocal             = (pLocalMax - localRay.origin).length();
     }
@@ -121,7 +130,6 @@ bool Instance::intersect(const Ray &worldRay, Intersection &its,
     for (int guard = 0; guard < 256; ++guard) {
         Intersection cand = itsBackup;
         cand.t            = tMaxLocal - tAccumLocal;
-
         if (cand.t <= Epsilon) {
             its = itsBackup;
             return false;
@@ -148,13 +156,13 @@ bool Instance::intersect(const Ray &worldRay, Intersection &its,
                 return false;
             }
 
+            applyNormalMap(cand); // apply once (after transformFrame)
             its = cand;
             return true;
         }
 
-        // Rejected: advance local ray and continue
-        const float step = cand.t;
-        tAccumLocal += step + Epsilon;
+        // rejected: step forward and continue
+        tAccumLocal += cand.t + Epsilon;
         r.origin = localRay.origin + tAccumLocal * localRay.direction;
     }
 

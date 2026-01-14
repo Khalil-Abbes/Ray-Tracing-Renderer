@@ -45,19 +45,26 @@ class Instance : public Shape {
     bool m_visible;
     /// @brief The alpha mask texture (can be null for fully opaque objects).
     ref<Texture> m_alpha;
-
+    /// @brief The normal map texture
+    ref<Texture> m_normal;
+    /// @brief The strength of the normal map effect.
+    float m_normalStrength;
     /// @brief Transforms the frame from object coordinates to world
     /// coordinates.
     inline void transformFrame(SurfaceEvent &surf, const Vector &wo) const;
+    /// @brief Applies the normal map to the intersection's shading normal.
+    void applyNormalMap(Intersection &its) const;
 
 public:
     Instance(const Properties &properties) : m_light(nullptr) {
-        m_shape     = properties.getChild<Shape>();
-        m_bsdf      = properties.getOptionalChild<Bsdf>();
-        m_emission  = properties.getOptionalChild<Emission>();
-        m_transform = properties.getOptionalChild<Transform>();
-        m_visible   = false;
-        m_alpha     = properties.getOptional<Texture>("alpha");
+        m_shape          = properties.getChild<Shape>();
+        m_bsdf           = properties.getOptionalChild<Bsdf>();
+        m_emission       = properties.getOptionalChild<Emission>();
+        m_transform      = properties.getOptionalChild<Transform>();
+        m_visible        = false;
+        m_alpha          = properties.getOptional<Texture>("alpha");
+        m_normal         = properties.getOptional<Texture>("normal");
+        m_normalStrength = properties.get<float>("normalStrength", 1.0f);
     }
 
     /// @brief Returns the shape.
